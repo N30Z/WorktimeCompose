@@ -1,0 +1,46 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.example.worktime">
+
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+  <application
+    android:name=".App"
+    android:label="Worktime"
+    android:icon="@drawable/ic_timer">
+    <activity android:name=".MainActivity"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <activity android:name=".ProjectSwitchActivity" android:exported="true" />
+    <activity android:name=".SettingsActivity" />
+    <activity android:name=".CalendarActivity" />
+
+    <service
+      android:name=".TimeTrackingService"
+      android:exported="false"
+      android:foregroundServiceType="location|dataSync" />
+
+    <receiver android:name=".GeofenceReceiver" android:exported="true" />
+    <receiver android:name=".BootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+      </intent-filter>
+    </receiver>
+
+    <service android:name=".wear.WearCommandListenerService" android:exported="true">
+      <intent-filter>
+        <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
