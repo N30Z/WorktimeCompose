@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -26,159 +25,120 @@ fun MainHomeScreen(
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
 
-    // Projekte (aktiv) laden
-    val projectsFlow = remember { app.db.projectDao().getActive() }
-    val projects by projectsFlow.collectAsState(initial = emptyList())
+    val prefs by app.dataStore.data.collectAsState(initial = null)
+    val projLabel = prefs?.get(SettingsKeys.PROJECT_LABEL) ?: "Projekte"
+    val rMin = prefs?.get(SettingsKeys.ROUNDING_MINUTES) ?: 0
+    val rMode = prefs?.get(SettingsKeys.ROUNDING_MODE) ?: "NONE"
 
-    // Letztes/aktuelles Projekt
-    var currentProjectId by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(projects) {
-        if (currentProjectId == null && projects.isNotEmpty()) {
-            // versuche gespeichertes letztes Projekt zu laden (optional)
-            currentProjectId = withContext(Dispatchers.IO) {
-                // falls du einen Key dafür hast – sonst nimm erstes aktives
-                projects.firstOrNull()?.id
-            }
-        }
-    }
+    val projects by remember { app.db.projectDao().getActive() }.collectAsState(initial = emptyList())
+    var currentProjectId by remember { mutableStateOf<Long?>(projects.firstOrNull()?.id) }
+    var showNew by remember { mutableStateOf(false) }
 
-    // Laufende Session + Zeiten
     val runningSession by produceState<WorkSession?>(initialValue = null, projects) {
         value = withContext(Dispatchers.IO) { app.db.sessionDao().getRunning() }
     }
-    val todayMs by produceState(0L, runningSession) {
+    val todayMsRaw by produceState(0L, runningSession) {
         value = withContext(Dispatchers.IO) { app.repo.effectiveToday() }
     }
-    val weekMs by produceState(0L, runningSession) {
+    val weekMsRaw by produceState(0L, runningSession) {
         value = withContext(Dispatchers.IO) { app.repo.effectiveWeek() }
     }
-    val currentProjectMs by produceState(0L, runningSession, currentProjectId) {
+    val currentProjectMsRaw by produceState(0L, runningSession, currentProjectId) {
         value = withContext(Dispatchers.IO) {
             currentProjectId?.let { app.db.sessionDao().effectiveSumForProject(it, System.currentTimeMillis()) } ?: 0L
         }
     }
 
+    val todayMs = roundDuration(todayMsRaw, rMin, rMode)
+    val weekMs  = roundDuration(weekMsRaw, rMin, rMode)
+    val currentProjectMs = roundDuration(currentProjectMsRaw, rMin, rMode)
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        // OBEREN 3/4: Buttons zu anderen Screens
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.weight(3f)
-        ) {
-            item { BigCard("Projekte", onOpenProjects) }
+        LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.weight(3f)) {
+            item { BigCard(projLabel, onOpenProjects) }
             item { BigCard("Export",   onOpenExport) }
             item { BigCard("Kalender", onOpenCalendar) }
             item { BigCard("Settings", onOpenSettings) }
         }
 
-        // UNTERES 1/4: Timer/Steuerung
         Column(Modifier.weight(1f)) {
-            // obere Zeile: Heute / Woche / aktuelles Projekt
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Heute", msToHHMM(todayMs), Modifier.weight(1f))
                 StatCard("Woche", msToHHMM(weekMs),  Modifier.weight(1f))
-                val projLabel = projects.firstOrNull { it.id == currentProjectId }?.name ?: "—"
-                StatCard("Projekt", "${msToHHMM(currentProjectMs)} ($projLabel)", Modifier.weight(1f))
+                val projName = projects.firstOrNull { it.id == currentProjectId }?.name ?: "—"
+                StatCard(projLabel.dropLastWhile { false }, "${msToHHMM(currentProjectMs)} ($projName)", Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(8.dp))
-
-            // Projekt-Auswahl + +Button
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 var expanded by remember { mutableStateOf(false) }
                 OutlinedButton(onClick = { expanded = true }, modifier = Modifier.weight(1f)) {
-                    Text(projects.firstOrNull { it.id == currentProjectId }?.name ?: "Projekt wählen")
+                    Text(projects.firstOrNull { it.id == currentProjectId }?.name ?: "$projLabel wählen")
                 }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     projects.forEach { p ->
-                        DropdownMenuItem(
-                            text = { Text(p.name) },
-                            onClick = {
-                                expanded = false
-                                currentProjectId = p.id
-                            }
-                        )
+                        DropdownMenuItem(text = { Text(p.name) }, onClick = {
+                            currentProjectId = p.id; expanded = false
+                        })
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = {
-                    // TODO: Dialog „Neues Projekt“
-                }) { Text("+") }
+                OutlinedButton(onClick = { showNew = true }) { Text("+") }
             }
 
             Spacer(Modifier.height(8.dp))
-
-            // Login/Start/Stop/Pause/Wechsel
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (runningSession == null) {
-                    Button(
-                        onClick = {
-                            val pid = currentProjectId ?: return@Button
+                    Button(onClick = {
+                        val pid = currentProjectId ?: return@Button
+                        scope.launch(Dispatchers.IO) { app.repo.startSession(pid) }
+                    }, modifier = Modifier.weight(1f)) { Text("Einloggen") }
+
+                    OutlinedButton(onClick = {
+                        val pid = currentProjectId ?: return@OutlinedButton
+                        val now = java.util.Calendar.getInstance()
+                        TimePickerDialog(ctx, { _, hh, mm ->
                             scope.launch(Dispatchers.IO) {
-                                app.repo.startSession(pid)
-                                withContext(Dispatchers.Main) { /* Trigger Recompose: neu einlesen */ }
+                                val base = dayStart(System.currentTimeMillis()) + (hh * 60 + mm) * 60_000L
+                                app.repo.startSessionAt(pid, base, manual = true)
                             }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Einloggen") }
-
-                    OutlinedButton(
-                        onClick = {
-                            val pid = currentProjectId ?: return@OutlinedButton
-                            // „Fing an um“ – manueller Startzeitpunkt
-                            val now = java.util.Calendar.getInstance()
-                            TimePickerDialog(ctx, { _, hh, mm ->
-                                scope.launch(Dispatchers.IO) {
-                                    val base = dayStart(System.currentTimeMillis()) + (hh * 60 + mm) * 60_000L
-                                    app.repo.startSessionAt(pid, base, manual = true)
-                                }
-                            }, now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE), true).show()
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Fing an um") }
+                        }, now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE), true).show()
+                    }, modifier = Modifier.weight(1f)) { Text("Fing an um") }
                 } else {
-                    Button(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) { app.repo.endSession() }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Ausloggen") }
-
-                    OutlinedButton(
-                        onClick = { scope.launch(Dispatchers.IO) { app.repo.togglePause() } },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Pause") }
-
-                    OutlinedButton(
-                        onClick = {
-                            // Projekt wechseln: stoppe aktuelle Session und starte neue für gewähltes Projekt
-                            val toId = currentProjectId ?: return@OutlinedButton
-                            scope.launch(Dispatchers.IO) { app.repo.switchProject(toId) }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Projekt wechseln") }
+                    Button(onClick = { scope.launch(Dispatchers.IO) { app.repo.endSession() } },
+                        modifier = Modifier.weight(1f)) { Text("Ausloggen") }
+                    OutlinedButton(onClick = { scope.launch(Dispatchers.IO) { app.repo.togglePause() } },
+                        modifier = Modifier.weight(1f)) { Text("Pause") }
+                    OutlinedButton(onClick = {
+                        val toId = currentProjectId ?: return@OutlinedButton
+                        scope.launch(Dispatchers.IO) { app.repo.switchProject(toId) }
+                    }, modifier = Modifier.weight(1f)) { Text("Projekt wechseln") }
                 }
             }
 
             Spacer(Modifier.height(8.dp))
-
-            // Timer seit Einloggen
-            val sinceLogin by produceState<String>(initialValue = "—", runningSession?.id) {
-                if (runningSession == null) {
-                    value = "—"
-                } else {
+            val sinceLogin by produceState("—", runningSession?.id) {
+                if (runningSession == null) value = "—" else {
                     while (true) {
-                        val now = System.currentTimeMillis()
-                        val dur = (runningSession!!.startTs).let { now - it }
-                        value = msToHHMM(dur)
-                        kotlinx.coroutines.delay(1_000)
+                        val dur = System.currentTimeMillis() - (runningSession?.startTs ?: System.currentTimeMillis())
+                        value = msToHHMM(roundDuration(dur, rMin, rMode)); kotlinx.coroutines.delay(1_000)
                     }
                 }
             }
             Text("Seit Einloggen: $sinceLogin")
         }
+    }
+
+    if (showNew) {
+        NewProjectDialog(
+            onDismiss = { showNew = false },
+            onCreate = { name, number ->
+                scope.launch(Dispatchers.IO) {
+                    val id = app.db.projectDao().insert(Project(name = name, number = number))
+                    withContext(Dispatchers.Main) { currentProjectId = id; showNew = false }
+                }
+            }
+        )
     }
 }
 

@@ -5,11 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
@@ -24,16 +20,14 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     val app = application as App
     setContent {
-      MaterialTheme {
+      WorktimeTheme(app) {
         val nav = rememberNavController()
         var title by remember { mutableStateOf("Worktime") }
+        val prefs by app.dataStore.data.collectAsState(initial = null)
+        val projLabel = prefs?.get(SettingsKeys.PROJECT_LABEL) ?: "Projekte"
 
         Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { padding ->
-          NavHost(
-            navController = nav,
-            startDestination = "home",
-            modifier = Modifier.padding(padding)
-          ) {
+          NavHost(navController = nav, startDestination = "home", modifier = Modifier.padding(padding)) {
             composable("home") {
               title = "Worktime"
               MainHomeScreen(
@@ -44,30 +38,17 @@ class MainActivity : ComponentActivity() {
                 onOpenSettings = { nav.navigate("settings") }
               )
             }
-            composable("calendar") {
-              title = "Kalender"
-              CalendarScreenV2(app) { sid -> nav.navigate("editor/$sid") }
+            composable("calendar") { title = "Kalender"; CalendarScreenV2(app) { sid -> nav.navigate("editor/$sid") } }
+            composable("projects") { title = projLabel; ProjectsScreen(app) { pid -> nav.navigate("project/$pid") } }
+            composable("project/{pid}", arguments = listOf(navArgument("pid"){ type = NavType.LongType })) { back ->
+              val pid = back.arguments?.getLong("pid") ?: return@composable
+              title = projLabel
+              ProjectDetailScreen(app, projectId = pid) { nav.popBackStack() }
             }
-            composable("projects") {
-              title = "Projekte"
-              // TODO: Projekte-Screen einhängen
-              PlaceholderScreen("Projekte (TODO)")
-            }
-            composable("export") {
-              title = "Export"
-              // TODO: Export-Screen
-              PlaceholderScreen("Export (TODO)")
-            }
-            composable("settings") {
-              title = "Einstellungen"
-              // TODO: Settings-Screen (Woche 40h etc.)
-              PlaceholderScreen("Settings (TODO)")
-            }
-            composable(
-              route = "editor/{sid}",
-              arguments = listOf(navArgument("sid") { type = NavType.LongType })
-            ) { backStack ->
-              val sid = backStack.arguments?.getLong("sid") ?: return@composable
+            composable("export")   { title = "Export";   PlaceholderScreen("Export (TODO)") }
+            composable("settings") { title = "Einstellungen"; SettingsScreen(app) }
+            composable("editor/{sid}", arguments = listOf(navArgument("sid"){ type = NavType.LongType })) { back ->
+              val sid = back.arguments?.getLong("sid") ?: return@composable
               SessionEditorScreen(app = app, sessionId = sid) { nav.popBackStack() }
             }
           }
@@ -80,8 +61,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PlaceholderScreen(label: String) {
   androidx.compose.foundation.layout.Box(
-    modifier = Modifier
-      .fillMaxSize(),
+    Modifier.fillMaxSize(),
     contentAlignment = androidx.compose.ui.Alignment.Center
   ) { Text(label) }
 }

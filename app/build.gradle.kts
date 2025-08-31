@@ -2,6 +2,7 @@ plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
   id("com.google.devtools.ksp")
+  id("androidx.room") version "2.6.1"
 }
 
 android {
@@ -31,6 +32,9 @@ android {
   }
   packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
+room {
+  schemaDirectory("$projectDir/schemas")
+}
 kotlin {
   jvmToolchain(17)
 }
@@ -41,7 +45,7 @@ dependencies {
   implementation("androidx.activity:activity-compose:1.9.2")
   implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
   implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-
+  implementation("androidx.compose.material:material-icons-extended:1.6.8") // Or the latest version
 
   implementation("androidx.room:room-ktx:2.6.1")
   implementation("androidx.navigation:navigation-compose:2.9.3")

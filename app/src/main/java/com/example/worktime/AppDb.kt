@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName="projects", indices=[Index("isArchived"), Index("name")])
 data class Project(
@@ -54,8 +55,16 @@ data class SessionEdit(
 @Dao
 interface ProjectDao {
   @Insert fun insert(p: Project): Long
+  @Update fun update(p: Project)
+  @Query("UPDATE projects SET isArchived=1 WHERE id=:id") fun archive(id: Long)
+  @Query("UPDATE projects SET isArchived=0 WHERE id=:id") fun unarchive(id: Long)
+
   @Query("SELECT * FROM projects WHERE isArchived = 0 ORDER BY name")
-  fun getActive(): kotlinx.coroutines.flow.Flow<List<Project>>
+  fun getActive(): Flow<List<Project>>
+
+  @Query("SELECT * FROM projects ORDER BY isArchived ASC, name ASC")
+  fun getAll(): Flow<List<Project>>
+
   @Query("SELECT * FROM projects WHERE id = :id")
   fun getByIdSync(id: Long): Project?
 }
@@ -64,12 +73,13 @@ interface ProjectDao {
 interface SessionDao {
   @Insert fun insert(s: WorkSession): Long
   @Update fun update(s: WorkSession)
-  @Query("SELECT * FROM work_sessions WHERE id=:id")
-  fun getById(id: Long): WorkSession?
-  @Query("SELECT * FROM work_sessions WHERE endTs IS NULL LIMIT 1")
-  fun getRunning(): WorkSession?
+  @Query("SELECT * FROM work_sessions WHERE id=:id") fun getById(id: Long): WorkSession?
+  @Query("SELECT * FROM work_sessions WHERE endTs IS NULL LIMIT 1") fun getRunning(): WorkSession?
 
-  // Effektivzeit einer Session (Pausen abgezogen)
+  // NEU: Stable Flow für Compose
+  @Query("SELECT * FROM work_sessions WHERE endTs IS NULL LIMIT 1")
+  fun observeRunning(): kotlinx.coroutines.flow.Flow<WorkSession?>
+
   @Query("""
     SELECT (
       (COALESCE(ws.endTs, :now) - ws.startTs)
@@ -80,7 +90,6 @@ interface SessionDao {
   """)
   fun effectiveForSession(sid: Long, now: Long): Long?
 
-  // Summe in einem Zeitraum
   @Query("""
     SELECT COALESCE(SUM(
       (COALESCE(ws.endTs, :now) - ws.startTs)
@@ -92,7 +101,6 @@ interface SessionDao {
   """)
   fun effectiveSumBetween(start: Long, end: Long, now: Long): Long
 
-  // ✅ NEU: Summe für ein Projekt (gesamte Historie). Wenn du "diese Woche" willst, sag Bescheid – dann gebe ich dir eine Between-Variante.
   @Query("""
     SELECT COALESCE(SUM(
       (COALESCE(ws.endTs, :now) - ws.startTs)
@@ -104,7 +112,9 @@ interface SessionDao {
   """)
   fun effectiveSumForProject(projectId: Long, now: Long): Long
 
-  // Sessions eines Tages (lokale Zeit)
+  @Query("SELECT * FROM work_sessions WHERE projectId = :projectId ORDER BY startTs ASC")
+  fun sessionsForProject(projectId: Long): List<WorkSession>
+
   @Transaction
   @Query("""
     SELECT * FROM work_sessions
@@ -119,22 +129,20 @@ interface PauseDao {
   @Insert fun insert(p: PauseSegment): Long
   @Update fun update(p: PauseSegment)
   @Delete fun delete(p: PauseSegment)
-  @Query("SELECT * FROM pause_segments WHERE sessionId=:sid AND endTs IS NULL LIMIT 1")
-  fun getOpenPause(sid: Long): PauseSegment?
-  @Query("SELECT * FROM pause_segments WHERE sessionId=:sid ORDER BY startTs")
-  fun allForSession(sid: Long): List<PauseSegment>
+  @Query("SELECT * FROM pause_segments WHERE sessionId=:sid AND endTs IS NULL LIMIT 1") fun getOpenPause(sid: Long): PauseSegment?
+  @Query("SELECT * FROM pause_segments WHERE sessionId=:sid ORDER BY startTs") fun allForSession(sid: Long): List<PauseSegment>
 }
 
 @Dao
 interface EditDao {
   @Insert fun insert(e: SessionEdit): Long
-  @Query("SELECT * FROM session_edits WHERE sessionId = :sid ORDER BY editedAt DESC")
-  fun listForSession(sid: Long): List<SessionEdit>
+  @Query("SELECT * FROM session_edits WHERE sessionId = :sid ORDER BY editedAt DESC") fun listForSession(sid: Long): List<SessionEdit>
 }
 
 @Database(
   entities=[Project::class, WorkSession::class, PauseSegment::class, SessionEdit::class],
-  version=3
+  version=3,
+  exportSchema = false   // <- Schema-Export in Entwicklung deaktiviert
 )
 abstract class AppDb : RoomDatabase() {
   abstract fun projectDao(): ProjectDao
@@ -166,7 +174,7 @@ abstract class AppDb : RoomDatabase() {
 
     fun build(ctx: Context) =
       Room.databaseBuilder(ctx, AppDb::class.java, "app.db")
-        .fallbackToDestructiveMigration()    // für Entwicklung ok
+        .fallbackToDestructiveMigration()    // Entwicklung
         .addMigrations(MIGRATION_2_3)
         .build()
   }
